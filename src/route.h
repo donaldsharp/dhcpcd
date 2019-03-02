@@ -56,7 +56,8 @@
 #endif
 
 struct rt {
-	TAILQ_ENTRY(rt)		rt_next;
+	RB_ENTRY(rt)            rt_next;
+
 	union sa_ss		rt_ss_dest;
 #define rt_dest			rt_ss_dest.sa
 	union sa_ss		rt_ss_netmask;
@@ -79,7 +80,8 @@ struct rt {
 #define	RTDF_DHCP		0x10		/* DHCP route */
 #define	RTDF_STATIC		0x20		/* Configured in dhcpcd */
 };
-TAILQ_HEAD(rt_head, rt);
+RB_HEAD(rt_head, rt);
+RB_PROTOTYPE(rt_head, rt, rt_next, rt_compare);
 
 void rt_init(struct dhcpcd_ctx *);
 void rt_dispose(struct dhcpcd_ctx *);
@@ -95,4 +97,5 @@ struct rt * rt_new(struct interface *);
 void rt_recvrt(int, const struct rt *);
 void rt_build(struct dhcpcd_ctx *, int);
 
+void rt_concat(struct rt_head *to, struct rt_head *from);
 #endif

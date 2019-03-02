@@ -2224,7 +2224,7 @@ inet6_staticroutes(struct rt_head *routes, struct dhcpcd_ctx *ctx)
 			{
 				rt = inet6_makeprefix(ifp, NULL, ia);
 				if (rt)
-					TAILQ_INSERT_TAIL(routes, rt, rt_next);
+					RB_INSERT(rt_head, routes, rt);
 			}
 		}
 	}
@@ -2248,14 +2248,14 @@ inet6_raroutes(struct rt_head *routes, struct dhcpcd_ctx *ctx, int expired,
 			rt = inet6_makeprefix(rap->iface, rap, addr);
 			if (rt) {
 				rt->rt_dflags |= RTDF_RA;
-				TAILQ_INSERT_TAIL(routes, rt, rt_next);
+				RB_INSERT(rt_head, routes, rt);
 			}
 		}
 		if (rap->lifetime) {
 			rt = inet6_makerouter(rap);
 			if (rt) {
 				rt->rt_dflags |= RTDF_RA;
-				TAILQ_INSERT_TAIL(routes, rt, rt_next);
+				RB_INSERT(rt_head, routes, rt);
 				if (have_default)
 					*have_default = true;
 			}
@@ -2281,7 +2281,7 @@ inet6_dhcproutes(struct rt_head *routes, struct dhcpcd_ctx *ctx,
 				rt = inet6_makeprefix(ifp, NULL, addr);
 				if (rt) {
 					rt->rt_dflags |= RTDF_DHCP;
-					TAILQ_INSERT_TAIL(routes, rt, rt_next);
+					RB_INSERT(rt_head, routes, rt);
 				}
 			}
 		}

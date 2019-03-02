@@ -466,7 +466,7 @@ decode_rfc3442_rt(struct rt_head *routes, struct interface *ifp,
 		sa_in_init(&rt->rt_netmask, &netmask);
 		sa_in_init(&rt->rt_gateway, &gateway);
 
-		TAILQ_INSERT_TAIL(routes, rt, rt_next);
+		RB_INSERT(rt_head, routes, rt);
 		n++;
 	}
 	return n;
@@ -655,7 +655,7 @@ get_option_routes(struct rt_head *routes, struct interface *ifp,
 			sa_in_init(&rt->rt_netmask, &netmask);
 			sa_in_init(&rt->rt_gateway, &gateway);
 
-			TAILQ_INSERT_TAIL(routes, rt, rt_next);
+			RB_INSERT(rt_head, routes, rt);
 			n++;
 		}
 	}
@@ -677,7 +677,7 @@ get_option_routes(struct rt_head *routes, struct interface *ifp,
 			sa_in_init(&rt->rt_dest, &dest);
 			sa_in_init(&rt->rt_netmask, &netmask);
 			sa_in_init(&rt->rt_gateway, &gateway);
-			TAILQ_INSERT_TAIL(routes, rt, rt_next);
+			RB_INSERT(rt_head, routes, rt);
 			n++;
 		}
 	}

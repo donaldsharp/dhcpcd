@@ -108,7 +108,7 @@ ipv4ll_subnetroute(struct rt_head *routes, struct interface *ifp)
 	in.s_addr = INADDR_ANY;
 	sa_in_init(&rt->rt_gateway, &in);
 	sa_in_init(&rt->rt_ifa, &state->addr->addr);
-	TAILQ_INSERT_TAIL(routes, rt, rt_next);
+	RB_INSERT(rt_head, routes, rt);
 	return 1;
 }
 
@@ -132,7 +132,7 @@ ipv4ll_defaultroute(struct rt_head *routes, struct interface *ifp)
 	sa_in_init(&rt->rt_netmask, &in);
 	sa_in_init(&rt->rt_gateway, &in);
 	sa_in_init(&rt->rt_ifa, &state->addr->addr);
-	TAILQ_INSERT_TAIL(routes, rt, rt_next);
+	RB_INSERT(rt_head, routes, rt);
 	return 1;
 }
 

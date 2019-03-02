@@ -263,7 +263,7 @@ inet_dhcproutes(struct rt_head *routes, struct interface *ifp)
 	/* An address does have to exist. */
 	assert(state->addr);
 
-	TAILQ_INIT(&nroutes);
+	RB_INIT(rt_head, &nroutes);
 
 	/* First, add a subnet route. */
 	if (!(ifp->flags & IFF_POINTOPOINT) &&
@@ -283,12 +283,12 @@ inet_dhcproutes(struct rt_head *routes, struct interface *ifp)
 		//in.s_addr = INADDR_ANY;
 		//sa_in_init(&rt->rt_gateway, &in);
 		rt->rt_gateway.sa_family = AF_UNSPEC;
-		TAILQ_INSERT_HEAD(&nroutes, rt, rt_next);
+		RB_INSERT(rt_head, &nroutes, rt);
 	}
 
 	/* If any set routes, grab them, otherwise DHCP routes. */
-	if (TAILQ_FIRST(&ifp->options->routes)) {
-		TAILQ_FOREACH(r, &ifp->options->routes, rt_next) {
+	if (!RB_EMPTY(rt_head, &ifp->options->routes)) {
+		RB_FOREACH(r, rt_head, &ifp->options->routes) {
 			if (sa_is_unspecified(&r->rt_gateway))
 				break;
 			if ((rt = rt_new0(ifp->ctx)) == NULL)
@@ -296,7 +296,7 @@ inet_dhcproutes(struct rt_head *routes, struct interface *ifp)
 			memcpy(rt, r, sizeof(*rt));
 			rt_setif(rt, ifp);
 			rt->rt_dflags = RTDF_STATIC;
-			TAILQ_INSERT_TAIL(&nroutes, rt, rt_next);
+			RB_INSERT(rt_head, &nroutes, rt);
 		}
 	} else {
 		if (dhcp_get_routes(&nroutes, ifp) == -1)
@@ -315,20 +315,20 @@ inet_dhcproutes(struct rt_head *routes, struct interface *ifp)
 		sa_in_init(&rt->rt_netmask, &in);
 		sa_in_init(&rt->rt_gateway, &state->addr->brd);
 		sa_in_init(&rt->rt_ifa, &state->addr->addr);
-		TAILQ_INSERT_HEAD(routes, rt, rt_next);
+		RB_INSERT(rt_head, routes, rt);
 	}
 
 	/* Copy our address as the source address and set mtu */
 	mtu = dhcp_get_mtu(ifp);
 	n = 0;
-	TAILQ_FOREACH(rt, &nroutes, rt_next) {
+	RB_FOREACH(rt, rt_head, &nroutes) {
 		rt->rt_mtu = mtu;
 		if (!(rt->rt_dflags & RTDF_STATIC))
 			rt->rt_dflags |= RTDF_DHCP;
 		sa_in_init(&rt->rt_ifa, &state->addr->addr);
 		n++;
 	}
-	TAILQ_CONCAT(routes, &nroutes, rt_next);
+	rt_concat(routes, &nroutes);
 
 	return n;
 }
@@ -349,7 +349,7 @@ inet_routerhostroute(struct rt_head *routes, struct interface *ifp)
 	if (ifp->flags & (IFF_LOOPBACK | IFF_POINTOPOINT))
 		return 0;
 
-	TAILQ_FOREACH(rt, routes, rt_next) {
+	RB_FOREACH(rt, rt_head, routes) {
 		if (rt->rt_dest.sa_family != AF_INET)
 			continue;
 		if (!sa_is_unspecified(&rt->rt_dest) ||
@@ -357,7 +357,7 @@ inet_routerhostroute(struct rt_head *routes, struct interface *ifp)
 			continue;
 		gateway = satosin(&rt->rt_gateway);
 		/* Scan for a route to match */
-		TAILQ_FOREACH(rth, routes, rt_next) {
+		RB_FOREACH(rth, rt_head, routes) {
 			if (rth == rt)
 				break;
 			/* match host */
@@ -418,7 +418,7 @@ inet_routerhostroute(struct rt_head *routes, struct interface *ifp)
 		sa_in_init(&rth->rt_gateway, &in);
 		rth->rt_mtu = dhcp_get_mtu(ifp);
 		sa_in_init(&rth->rt_ifa, &state->addr->addr);
-		TAILQ_INSERT_BEFORE(rt, rth, rt_next);
+		RB_INSERT(rt_head, routes, rth);
 	}
 	return 0;
 }

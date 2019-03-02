@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stddef.h>
 
 #include "config.h"
 #include "common.h"
@@ -59,13 +60,40 @@ rt_cmp_netmask(const struct rt *rt1, const struct rt *rt2)
 	return sa_cmp(&rt1->rt_netmask, &rt2->rt_netmask);
 }
 
+static int rt_compare(const struct rt *rt1, const struct rt *rt2)
+{
+	int ret;
+
+	ret = sa_cmp(&rt1->rt_dest, &rt2->rt_dest);
+	if (ret)
+		return ret;
+
+	if (rt1->rt_ifp && !rt2->rt_ifp)
+		return -1;
+
+	if (!rt1->rt_ifp && rt2->rt_ifp)
+		return 1;
+
+#ifdef HAVE_ROUTE_METRIC
+	ret = (int)rt1->rt_ifp->metric - (int)rt2->rt_ifp->metric;
+	if (!ret)
+		return ret;
+#endif
+	ret = rt_cmp_netmask(rt1, rt2);
+	if (!ret)
+		return ret;
+
+	return 0;
+}
+RB_GENERATE(rt_head, rt, rt_next, rt_compare);
+
 void
 rt_init(struct dhcpcd_ctx *ctx)
 {
 
-	TAILQ_INIT(&ctx->routes);
-	TAILQ_INIT(&ctx->kroutes);
-	TAILQ_INIT(&ctx->froutes);
+	RB_INIT(rt_head, &ctx->routes);
+	RB_INIT(rt_head, &ctx->kroutes);
+	RB_INIT(rt_head, &ctx->froutes);
 }
 
 static void
@@ -123,13 +151,13 @@ rt_headclear0(struct dhcpcd_ctx *ctx, struct rt_head *rts, int af)
 	assert(ctx != NULL);
 	assert(&ctx->froutes != rts);
 
-	TAILQ_FOREACH_SAFE(rt, rts, rt_next, rtn) {
+	RB_FOREACH_SAFE(rt, rt_head, rts, rtn) {
 		if (af != AF_UNSPEC &&
 		    rt->rt_dest.sa_family != af &&
 		    rt->rt_gateway.sa_family != af)
 			continue;
-		TAILQ_REMOVE(rts, rt, rt_next);
-		TAILQ_INSERT_TAIL(&ctx->froutes, rt, rt_next);
+		RB_REMOVE(rt_head, rts, rt);
+		RB_INSERT(rt_head, &ctx->froutes, rt);
 	}
 }
 
@@ -138,7 +166,7 @@ rt_headclear(struct rt_head *rts, int af)
 {
 	struct rt *rt;
 
-	if (rts == NULL || (rt = TAILQ_FIRST(rts)) == NULL)
+	if (rts == NULL || (rt = RB_ROOT(rt_head, rts)) == NULL)
 		return;
 	rt_headclear0(rt->rt_ifp->ctx, rts, af);
 }
@@ -148,8 +176,8 @@ rt_headfree(struct rt_head *rts)
 {
 	struct rt *rt;
 
-	while ((rt = TAILQ_FIRST(rts))) {
-		TAILQ_REMOVE(rts, rt, rt_next);
+	while ((rt = RB_ROOT(rt_head, rts))) {
+		RB_REMOVE(rt_head, rts, rt);
 		free(rt);
 	}
 }
@@ -170,8 +198,8 @@ rt_new0(struct dhcpcd_ctx *ctx)
 	struct rt *rt;
 
 	assert(ctx != NULL);
-	if ((rt = TAILQ_FIRST(&ctx->froutes)) != NULL)
-		TAILQ_REMOVE(&ctx->froutes, rt, rt_next);
+	if ((rt = RB_ROOT(rt_head, &ctx->froutes)) != NULL)
+		RB_REMOVE(rt_head, &ctx->froutes, rt);
 	else if ((rt = malloc(sizeof(*rt))) == NULL) {
 		logerr(__func__);
 		return NULL;
@@ -210,7 +238,7 @@ rt_free(struct rt *rt)
 
 	assert(rt != NULL);
 	assert(rt->rt_ifp->ctx != NULL);
-	TAILQ_INSERT_TAIL(&rt->rt_ifp->ctx->froutes, rt, rt_next);
+	RB_INSERT(rt_head, &rt->rt_ifp->ctx->froutes, rt);
 }
 
 void
@@ -222,17 +250,27 @@ rt_freeif(struct interface *ifp)
 	if (ifp == NULL)
 		return;
 	ctx = ifp->ctx;
-	TAILQ_FOREACH_SAFE(rt, &ctx->routes, rt_next, rtn) {
+	RB_FOREACH_SAFE(rt, rt_head, &ctx->routes, rtn) {
 		if (rt->rt_ifp == ifp) {
-			TAILQ_REMOVE(&ctx->routes, rt, rt_next);
+			RB_REMOVE(rt_head, &ctx->routes, rt);
 			rt_free(rt);
 		}
 	}
-	TAILQ_FOREACH_SAFE(rt, &ctx->kroutes, rt_next, rtn) {
+	RB_FOREACH_SAFE(rt, rt_head, &ctx->kroutes, rtn) {
 		if (rt->rt_ifp == ifp) {
-			TAILQ_REMOVE(&ctx->kroutes, rt, rt_next);
+			RB_REMOVE(rt_head, &ctx->kroutes, rt);
 			rt_free(rt);
 		}
+	}
+}
+
+void rt_concat(struct rt_head *to, struct rt_head *from)
+{
+	struct rt *rt;
+
+	while ((rt = RB_ROOT(rt_head, from))) {
+		RB_REMOVE(rt_head, from, rt);
+		RB_INSERT(rt_head, to, rt);
 	}
 }
 
@@ -243,16 +281,10 @@ rt_find(struct rt_head *rts, const struct rt *f)
 
 	assert(rts != NULL);
 	assert(f != NULL);
-	TAILQ_FOREACH(rt, rts, rt_next) {
-		if (sa_cmp(&rt->rt_dest, &f->rt_dest) == 0 &&
-#ifdef HAVE_ROUTE_METRIC
-		    (f->rt_ifp == NULL ||
-		    rt->rt_ifp->metric == f->rt_ifp->metric) &&
-#endif
-		    rt_cmp_netmask(f, rt) == 0)
-			return rt;
-	}
-	return NULL;
+
+	rt = RB_FIND(rt_head, rts, f);
+
+	return rt;
 }
 
 static void
@@ -264,7 +296,7 @@ rt_kfree(struct rt *rt)
 	assert(rt != NULL);
 	ctx = rt->rt_ifp->ctx;
 	if ((f = rt_find(&ctx->kroutes, rt)) != NULL) {
-		TAILQ_REMOVE(&ctx->kroutes, f, rt_next);
+		RB_REMOVE(rt_head, &ctx->kroutes, f);
 		rt_free(f);
 	}
 }
@@ -284,11 +316,11 @@ rt_recvrt(int cmd, const struct rt *rt)
 	switch(cmd) {
 	case RTM_DELETE:
 		if (f != NULL) {
-			TAILQ_REMOVE(&ctx->kroutes, f, rt_next);
+			RB_REMOVE(rt_head, &ctx->kroutes, f);
 			rt_free(f);
 		}
 		if ((f = rt_find(&ctx->routes, rt)) != NULL) {
-			TAILQ_REMOVE(&ctx->routes, f, rt_next);
+			RB_REMOVE(rt_head, &ctx->routes, f);
 			rt_desc("deleted", f);
 			rt_free(f);
 		}
@@ -299,7 +331,7 @@ rt_recvrt(int cmd, const struct rt *rt)
 		if ((f = rt_new(rt->rt_ifp)) == NULL)
 			break;
 		memcpy(f, rt, sizeof(*f));
-		TAILQ_INSERT_TAIL(&ctx->kroutes, f, rt_next);
+		RB_INSERT(rt_head, &ctx->kroutes, f);
 		break;
 	}
 
@@ -478,7 +510,7 @@ rt_doroute(struct rt *rt)
 			if (!rt_add(rt, or))
 				return false;
 		}
-		TAILQ_REMOVE(&ctx->routes, or, rt_next);
+		RB_REMOVE(rt_head, &ctx->routes, or);
 		rt_free(or);
 	} else {
 		if (rt->rt_dflags & RTDF_FAKE) {
@@ -506,8 +538,8 @@ rt_build(struct dhcpcd_ctx *ctx, int af)
 	 * our routes are managed correctly. */
 	if_sortinterfaces(ctx);
 
-	TAILQ_INIT(&routes);
-	TAILQ_INIT(&added);
+	RB_INIT(rt_head, &routes);
+	RB_INIT(rt_head, &added);
 
 	switch (af) {
 #ifdef INET
@@ -524,7 +556,7 @@ rt_build(struct dhcpcd_ctx *ctx, int af)
 #endif
 	}
 
-	TAILQ_FOREACH_SAFE(rt, &routes, rt_next, rtn) {
+	RB_FOREACH_SAFE(rt, rt_head, &routes, rtn) {
 		if (rt->rt_dest.sa_family != af &&
 		    rt->rt_gateway.sa_family != af)
 			continue;
@@ -532,17 +564,17 @@ rt_build(struct dhcpcd_ctx *ctx, int af)
 		if ((rt_find(&added, rt)) != NULL)
 			continue;
 		if (rt_doroute(rt)) {
-			TAILQ_REMOVE(&routes, rt, rt_next);
-			TAILQ_INSERT_TAIL(&added, rt, rt_next);
+			RB_REMOVE(rt_head, &routes, rt);
+			RB_INSERT(rt_head, &added, rt);
 		}
 	}
 
 	/* Remove old routes we used to manage. */
-	TAILQ_FOREACH_SAFE(rt, &ctx->routes, rt_next, rtn) {
+	RB_FOREACH_SAFE(rt, rt_head, &ctx->routes, rtn) {
 		if (rt->rt_dest.sa_family != af &&
 		    rt->rt_gateway.sa_family != af)
 			continue;
-		TAILQ_REMOVE(&ctx->routes, rt, rt_next);
+		RB_REMOVE(rt_head, &ctx->routes, rt);
 		if (rt_find(&added, rt) == NULL) {
 			o = rt->rt_ifp->options ?
 			    rt->rt_ifp->options->options :
@@ -552,11 +584,11 @@ rt_build(struct dhcpcd_ctx *ctx, int af)
 				(DHCPCD_EXITING | DHCPCD_PERSISTENT))
 				rt_delete(rt);
 		}
-		TAILQ_INSERT_TAIL(&ctx->froutes, rt, rt_next);
+		RB_INSERT(rt_head, &ctx->froutes, rt);
 	}
 
 	rt_headclear(&ctx->routes, af);
-	TAILQ_CONCAT(&ctx->routes, &added, rt_next);
+	rt_concat(&ctx->routes, &added);
 
 getfail:
 	rt_headclear(&routes, AF_UNSPEC);
